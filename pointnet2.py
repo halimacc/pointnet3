@@ -136,7 +136,7 @@ def sample_and_group_all(xyz, points):
     return new_xyz, new_points
 
 class PointNetSetAbstraction(nn.Module):
-    def __init__(self, npoint, radius, nsample, in_channel, mlp, mlp2, group_all):
+    def __init__(self, npoint, radius, nsample, in_channel, mlp, group_all):
         super(PointNetSetAbstraction, self).__init__()
         self.npoint = npoint
         self.radius = radius
@@ -269,10 +269,10 @@ class PointNetFeaturePropagation(nn.Module):
         else:
             dists = square_distance(xyz1, xyz2)
             dists, idx = dists.sort(dim=-1)
-            dists, idx = dists[:,:,:3], idx[:,:,:3]
+            dists, idx = dists[:,:,:3], idx[:,:,:3] #[B, N, 3]
             dists[dists < 1e-10] = 1e-10
-            weight = 1 / dists
-            weight = weight / torch.sum(weight, dim=-1).view(B, N, 1)
+            weight = 1.0 / dists #[B, N, 3]
+            weight = weight / torch.sum(weight, dim=-1).view(B, N, 1) #[B, N, 3]
             interpolated_points = torch.sum(index_points(points2, idx) * weight.view(B, N, 3, 1), dim = 2)
 
         if points1 is not None:
@@ -293,7 +293,7 @@ class PointNet2ClsMsg(nn.Module):
         super(PointNet2ClsMsg, self).__init__()
         self.sa1 = PointNetSetAbstractionMsg(512, [0.1,0.2,0.4], [16,32,128], 0, [[32,32,64], [64,64,128], [64,96,128]])
         self.sa2 = PointNetSetAbstractionMsg(128, [0.2,0.4,0.8], [32,64,128], 320, [[64,64,128], [128,128,256], [128,128,256]])
-        self.sa3 = PointNetSetAbstraction(None, None, None, 640, [256, 512, 1024], None, True)
+        self.sa3 = PointNetSetAbstraction(None, None, None, 640 + 3, [256, 512, 1024], True)
         self.fc1 = nn.Linear(1024, 512)
         self.bn1 = nn.BatchNorm1d(512)
         self.drop1 = nn.Dropout(0.4)
@@ -304,7 +304,32 @@ class PointNet2ClsMsg(nn.Module):
 
     def forward(self, xyz):
         B, _, _ = xyz.shape
-        t = time()
+        l1_xyz, l1_points = self.sa1(xyz, None)
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+        x = l3_points.view(B, 1024)
+        x = self.drop1(F.relu(self.bn1(self.fc1(x))))
+        x = self.drop2(F.relu(self.bn2(self.fc2(x))))
+        x = self.fc3(x)
+        x = F.log_softmax(x, -1)
+        return x
+
+class PointNet2ClsSsg(nn.Module):
+    def __init__(self):
+        super(PointNet2ClsSsg, self).__init__()
+        self.sa1 = PointNetSetAbstraction(512, 0.2, 32, 3, [64, 64, 128], False)
+        self.sa2 = PointNetSetAbstraction(128, 0.4, 64, 128 + 3, [128,128,256], False)
+        self.sa3 = PointNetSetAbstraction(None, None, None, 256 + 3, [256, 512, 1024], True)
+        self.fc1 = nn.Linear(1024, 512)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.drop1 = nn.Dropout(0.4)
+        self.fc2 = nn.Linear(512, 256)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.drop2 = nn.Dropout(0.4)
+        self.fc3 = nn.Linear(256, 40)
+    
+    def forward(self, xyz):
+        B, _, _ = xyz.shape
         l1_xyz, l1_points = self.sa1(xyz, None)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
@@ -318,9 +343,9 @@ class PointNet2ClsMsg(nn.Module):
 class PointNet2PartSeg(nn.Module):
     def __init__(self, num_classes):
         super(PointNet2PartSeg, self).__init__()
-        self.sa1 = PointNetSetAbstraction(512, 0.2, 64, 3, [64, 64, 128], None, False)
-        self.sa2 = PointNetSetAbstraction(128, 0.4, 64, 128 + 3, [128, 128, 256], None, False)
-        self.sa3 = PointNetSetAbstraction(None, None, None, 256 + 3, [256, 256, 1024], None, True)
+        self.sa1 = PointNetSetAbstraction(512, 0.2, 64, 3, [64, 64, 128], False)
+        self.sa2 = PointNetSetAbstraction(128, 0.4, 64, 128 + 3, [128, 128, 256], False)
+        self.sa3 = PointNetSetAbstraction(None, None, None, 256 + 3, [256, 256, 1024], True)
         self.fp3 = PointNetFeaturePropagation(1280, [256, 256])
         self.fp2 = PointNetFeaturePropagation(384, [256, 128])
         self.fp1 = PointNetFeaturePropagation(128, [128, 128, 128])
@@ -346,10 +371,10 @@ class PointNet2PartSeg(nn.Module):
 class PointNet2SemSeg(nn.Module):
     def __init__(self, num_classes):
         super(PointNet2SemSeg, self).__init__()
-        self.sa1 = PointNetSetAbstraction(1024, 0.1, 32, 3, [32, 32, 64], None, False)
-        self.sa2 = PointNetSetAbstraction(256, 0.2, 32, 64 + 3, [64, 64, 128], None, False)
-        self.sa3 = PointNetSetAbstraction(64, 0.4, 32, 128 + 3, [128, 128, 256], None, False)
-        self.sa4 = PointNetSetAbstraction(16, 0.8, 32, 256 + 3, [256, 256, 512], None, False)
+        self.sa1 = PointNetSetAbstraction(1024, 0.1, 32, 3, [32, 32, 64], False)
+        self.sa2 = PointNetSetAbstraction(256, 0.2, 32, 64 + 3, [64, 64, 128], False)
+        self.sa3 = PointNetSetAbstraction(64, 0.4, 32, 128 + 3, [128, 128, 256], False)
+        self.sa4 = PointNetSetAbstraction(16, 0.8, 32, 256 + 3, [256, 256, 512], False)
         self.fp4 = PointNetFeaturePropagation(768, [256, 256])
         self.fp3 = PointNetFeaturePropagation(384, [256, 256])
         self.fp2 = PointNetFeaturePropagation(320, [256, 128])
@@ -375,14 +400,53 @@ class PointNet2SemSeg(nn.Module):
         x = F.log_softmax(x, dim=1)
         return x
 
+"""
+    Custom segmentation network for tensorbody dataset
+"""
+class PointNet2Seg(nn.Module):
+    def __init__(self, num_classes):
+        super(PointNet2Seg, self).__init__()
+        self.sa1 = PointNetSetAbstraction(512, 0.2, 64, 3, [64, 128, 256], False)
+        self.sa2 = PointNetSetAbstraction(128, 0.4, 64, 256 + 3, [256, 512, 1024], False)
+        self.sa3 = PointNetSetAbstraction(None, None, None, 1024 + 3, [1024, 2048, 4096], True)
+        self.fp3 = PointNetFeaturePropagation(5120, [1024, 1024])
+        self.fp2 = PointNetFeaturePropagation(1280, [1024, 1024])
+        self.fp1 = PointNetFeaturePropagation(1024, [1024, 1024])
+        self.conv1 = nn.Conv1d(1024, 1024, 1)
+        self.bn1 = nn.BatchNorm1d(1024)
+        self.drop1 = nn.Dropout(0.5)
+        self.conv2 = nn.Conv1d(1024, num_classes, 1)
+
+    def forward(self, xyz):
+        l1_xyz, l1_points = self.sa1(xyz, None)
+        l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
+        l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
+
+        l2_points = self.fp3(l2_xyz, l3_xyz, l2_points, l3_points)
+        l1_points = self.fp2(l1_xyz, l2_xyz, l1_points, l2_points)
+        l0_points = self.fp1(xyz, l1_xyz, None, l1_points)
+
+        x = self.drop1(F.relu(self.bn1(self.conv1(l0_points))))
+        x = self.conv2(x)
+        x = F.log_softmax(x, dim=1)
+        return x
+
+    def load_my_state_dict(self, state_dict):
+        own_state = self.state_dict()
+        for name, param in state_dict.items():
+            if name not in own_state:
+                print(name)
+                continue
+            own_state[name].copy_(param)
+
 if __name__ == '__main__':
-    for i in range(10):
-        t = time()
-        xyz = torch.rand(16, 3, 2048).cuda()
-        net = PointNet2SemSeg(2048)
-        net.cuda()
-        x = net(xyz)
-        timeit('it', t)
+    # for i in range(10):
+    #     t = time()
+    #     xyz = torch.rand(16, 3, 2048).cuda()
+    #     net = PointNet2SemSeg(2048)
+    #     net.cuda()
+    #     x = net(xyz)
+    #     timeit('it', t)
 
     # xyz1 = torch.rand(4, 3, 2048).cuda()
     # xyz2 = torch.rand(4, 3, 512).cuda()
@@ -397,3 +461,7 @@ if __name__ == '__main__':
     # net.cuda()
     # x = net(xyz)
     # print(x.shape)
+
+    a = torch.load('part_seg/8.pth')
+    for name ,param in a.items():
+        print(name)

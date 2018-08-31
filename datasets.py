@@ -2,6 +2,7 @@ import torch.utils.data as data
 import h5py
 import numpy as np
 import os
+from glob import glob
 
 class ModelNetDataset(data.Dataset):
     def __init__(self, train=True):
@@ -66,8 +67,34 @@ class TensorBodyDataset():
 
         return pointcloud, label
 
+class SMPLDataset():
+    def __init__(self, data_dir, normalize=True, train=True):
+        self.normalize = normalize
+        self.pointcloud_files = glob(os.path.join(data_dir, 'pointclouds', '*/*.npy'))
+        self.label_files = glob(os.path.join(data_dir, 'labels', '*/*.npy'))
+        N = len(self.pointcloud_files)  
+        indices = np.random.choice(N, N, replace=False)
+        part = int(N * 0.8)
+        if train:
+            self.idxs = indices[:part]
+        else:
+            self.idxs = indices[part:]
+
+    def __len__(self):
+        return len(self.idxs)
+
+    def __getitem__(self, index):
+        pointcloud = np.load(self.pointcloud_files[self.idxs[index]]).astype(np.float32)
+        label = np.load(self.label_files[self.idxs[index]]).astype(np.int64)
+
+        if self.normalize:
+            pointcloud = pc_normalize(pointcloud)
+
+        return pointcloud, label
+
+
 if __name__ == '__main__':
     #dataset = ModelNetDataset()
-    dataset = TensorBodyDataset('data/seg2048')
+    #dataset = TensorBodyDataset('data/seg1024')
+    dataset = SMPLDataset('D:\\Data\\CMUPointclouds')
     print(len(dataset))
-

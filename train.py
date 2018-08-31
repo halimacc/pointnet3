@@ -1,26 +1,27 @@
 import argparse
 from pointnet import PointNetCls
-from pointnet2 import PointNet2ClsMsg
+from pointnet2 import *
 from datasets import ModelNetDataset
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
+import argparse
 
-def train(num_epochs, batch_size):
-    train_dataset = ModelNetDataset()
+def train(args):
+    # init training dataset
+    train_dataset = ModelNetDataset(train=True)
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
     train_examples = len(train_dataset)
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     train_batches = len(train_dataloader)
 
     test_dataset = ModelNetDataset(train=False)
     test_examples = len(test_dataset)
-    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
     test_batches = len(test_dataloader)
 
-    #classifier = PointNetCls()
-    classifier = PointNet2ClsMsg()
+    classifier = PointNet2ClsSsg()
     optimizer = optim.Adam(classifier.parameters())
 
     print("Train examples: {}".format(train_examples))
@@ -70,7 +71,11 @@ def train(num_epochs, batch_size):
         print("Eval accuracy: {:.2f}%".format(correct_examples / test_examples * 100.0))
 
 if __name__ == '__main__':
-    batch_size = 8
-    num_epochs = 50
-    train(num_epochs, batch_size)
+    parser = argparse.ArgumentParser('Pointnet Trainer')
+    parser.add_argument('--batch_size',                type=int,   help='batch size', default=8)
+    parser.add_argument('--num_epochs',                type=int,   help='number of epochs', default=10)
+    parser.add_argument('--log_directory',             type=str,   help='directory to save checkpoints and summaries', default='')
+    parser.add_argument('--checkpoint_path',           type=str,   help='path to a specific checkpoint to load', default='')
+    args = parser.parse_args()
+    train(args)
     
